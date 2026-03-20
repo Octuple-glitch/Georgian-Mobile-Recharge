@@ -1,0 +1,108 @@
+<?php
+header('Content-Type: application/json');
+
+const API_BASE = 'https://api.tc-clicks.com/api/v3/';
+
+// Get real visitor IP
+function getIp() {
+    $ip = $_SERVER['REMOTE_ADDR'] ?? '0.0.0.0';
+    if (isset($_SERVER['HTTP_X_FORWARDED_FOR'])) {
+        $ips = explode(',', $_SERVER['HTTP_X_FORWARDED_FOR']);
+        $ip = trim($ips[0]);
+    }
+    return $ip;
+}
+
+// Get browser headers (required by API)
+function getHeaders() {
+    $headers = [];
+    foreach ($_SERVER as $name => $value) {
+        if (str_starts_with($name, 'HTTP_')) {
+            $key = str_replace(' ', '-', ucwords(strtolower(str_replace('_', ' ', substr($name, 5)))));
+            $headers[$key] = $value;
+        }
+    }
+    return base64_encode(json_encode($headers));
+}
+
+// Make API call
+function callApi($endpoint, $data) {
+    $ch = curl_init();
+    curl_setopt_array($ch, [
+        CURLOPT_URL => API_BASE . $endpoint,
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_POST => true,
+        CURLOPT_POSTFIELDS => json_encode($data),
+        CURLOPT_HTTPHEADER => ['Content-Type: application/json'],
+        CURLOPT_TIMEOUT => 60
+    ]);
+    
+    $response = curl_exec($ch);
+    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    curl_close($ch);
+    
+    if ($response === false) {
+        return ['status' => 'error', 'message' => 'Network error'];
+    }
+    
+    $decoded = json_decode($response, true);
+    if (!$decoded) {
+        return ['status' => 'error', 'message' => 'Invalid response'];
+    }
+    
+    return $decoded;
+}
+
+// Get request data
+$input = json_decode(file_get_contents('php://input'), true) ?? [];
+$action = $_GET['action'] ?? '';
+
+// Your partner code (from the offer details)
+$PARTNER_CODE = 13610;
+$OFFER_ID = 155190;
+
+try {
+    switch ($action) {
+        case 'sendPin':
+            $msisdn = $input['msisdn'] ?? '';
+            if (!$msisdn) {
+                echo json_encode(['status' => 'error', 'message' => 'Phone number required']);
+                exit;
+            }
+            
+            $result = callApi('start/' . $OFFER_ID, [
+                'p' => $PARTNER_CODE,
+                'ip' => getIp(),
+                'headers' => getHeaders(),
+                'return-url' => 'https://' . $_SERVER['HTTP_HOST'] . '/index.html',
+                'language' => 'ka',
+                'msisdn' => $msisdn
+            ]);
+            
+            echo json_encode($result);
+            break;
+            
+        case 'verify':
+            $tracker = $input['tracker'] ?? '';
+            $pin = $input['pin'] ?? '';
+            
+            if (!$tracker || !$pin) {
+                echo json_encode(['status' => 'error', 'message' => 'Missing data']);
+                exit;
+            }
+            
+            $result = callApi('verify/' . $tracker, [
+                'headers' => getHeaders(),
+                'pin' => $pin
+            ]);
+            
+            echo json_encode($result);
+            break;
+            
+        default:
+            echo json_encode(['status' => 'error', 'message' => 'Invalid action']);
+    }
+} catch (Exception $e) {
+    echo json_encode(['status' => 'error', 'message' => $e->getMessage()]);
+}
+?>
